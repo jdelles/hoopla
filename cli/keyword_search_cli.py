@@ -21,13 +21,11 @@ def main() -> None:
             index = InvertedIndex()
             index.build()
             index.save()
-            docs = index.get_documents("merida")
-            print(f"First document for token 'merida' = {docs[0]}")
         case "search":
             print("Searching for:", args.query)
             results = search_command(args.query)
-            for i, res in enumerate(results, 1):
-                print(f"{i}. {res['title']}")
+            for res in results:
+                print(f"{res['id']} {res['title']}")
         case _:
             parser.print_help()
 
