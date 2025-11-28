@@ -12,13 +12,17 @@ def main() -> None:
     search_parser = subparsers.add_parser("search", help="Search movies using BM25")
     search_parser.add_argument("query", type=str, help="Search query")
 
-    search_parser = subparsers.add_parser("build", help="Build reusable index of movies")
+    subparsers.add_parser("build", help="Build reusable index of movies")
+
+    tf_parser = subparsers.add_parser("tf", help="get term frequency")
+    tf_parser.add_argument("doc_id", type=int, help="The document id you're searching")
+    tf_parser.add_argument("term", type=str, help="A term you're searching")
 
     args = parser.parse_args()
+    index = InvertedIndex()
 
     match args.command:
         case "build":
-            index = InvertedIndex()
             index.build()
             index.save()
         case "search":
@@ -26,6 +30,9 @@ def main() -> None:
             results = search_command(args.query)
             for res in results:
                 print(f"{res['id']} {res['title']}")
+        case "tf":
+            index.load()
+            print(index.get_tf(args.doc_id, args.term))
         case _:
             parser.print_help()
 
