@@ -2,7 +2,8 @@ from collections import defaultdict, Counter
 from nltk.stem import PorterStemmer
 from pathlib import Path
 from .text_utils import tokenize_text
-from .search_utils import load_movies, BM25_K1
+from .search_utils import load_movies, load_stopwords, BM25_K1, BM25_B
+import heapq
 import math
 import pickle
 
@@ -10,15 +11,27 @@ class InvertedIndex:
     def __init__(self): 
         self.index = defaultdict(set)
         self.docmap = {}
+        self.doc_lengths = {}
         self.term_frequencies = defaultdict(Counter)
         self.stemmer = PorterStemmer()
+        self.stopwords = load_stopwords()
 
 
     def __add_document(self, doc_id, text):
-        text_tokens = tokenize_text(text, [], self.stemmer)
+        text_tokens = tokenize_text(text, self.stopwords, self.stemmer)
         self.term_frequencies[doc_id].update(text_tokens)
+        self.doc_lengths[doc_id] = len(text_tokens)
         for token in text_tokens: 
             self.index[token.lower()].add(doc_id)
+
+    
+    def __get_avg_doc_length(self):
+        if len(self.doc_lengths) == 0:
+            return 0.0
+        total = 0
+        for doc_id in self.doc_lengths:
+            total = total + self.doc_lengths[doc_id]
+        return total / len(self.doc_lengths)
 
 
     def get_documents(self, term):
@@ -26,7 +39,7 @@ class InvertedIndex:
     
 
     def get_tf(self, doc_id, term):
-        term_token = tokenize_text(term, [], self.stemmer)
+        term_token = tokenize_text(term, self.stopwords, self.stemmer)
         if len(term_token) != 1:
             raise ValueError("Can only get one term frequency")
         if doc_id not in self.term_frequencies:
@@ -35,7 +48,7 @@ class InvertedIndex:
     
 
     def get_idf(self, term):
-        term_token = tokenize_text(term, [], self.stemmer)
+        term_token = tokenize_text(term, self.stopwords, self.stemmer)
         if len(term_token) != 1:
             raise ValueError("You must supply exactly 1 token for idf")
         if term_token[0] not in self.index:
@@ -51,19 +64,49 @@ class InvertedIndex:
     
 
     def get_bm25_idf(self, term):
-        term_token = tokenize_text(term, [], self.stemmer)
+        term_token = tokenize_text(term, self.stopwords, self.stemmer)
         if len(term_token) != 1:
             raise ValueError("You must supply exactly 1 token for idf")
         if term_token[0] not in self.index:
-            raise ValueError("Invalid term")
+            return 0  
         N = len(self.docmap)
         df = len(self.index[term_token[0]])
         return math.log((N - df + 0.5) / (df + 0.5) + 1)
     
 
-    def get_bm25_tf(self, doc_id, term, k1 = BM25_K1):
+    def get_title_by_id(self, doc_id):
+        return self.docmap[doc_id]['title']
+    
+
+    def get_bm25_tf(self, doc_id, term, k1 = BM25_K1, b = BM25_B):
         tf = self.get_tf(doc_id, term)
-        return (tf * (k1 + 1)) / (tf + k1)
+        doc_length = self.doc_lengths[doc_id]
+        avg_doc_length = self.__get_avg_doc_length()
+        length_norm = 1 - b + b * (doc_length / avg_doc_length)
+        return (tf * (k1 + 1)) / (tf + k1 * length_norm)
+    
+
+    def bm25(self, doc_id, term): 
+        bm25_tf = self.get_bm25_tf(doc_id, term)
+        bm25_idf = self.get_bm25_idf(term)
+        return bm25_tf * bm25_idf
+    
+
+    def bm25_search(self, query, limit):
+        query_tokens = query.split()
+        scores = defaultdict(float)
+        
+        candidate_docs = set()
+        for query_token in query_tokens:
+            stemmed_tokens = tokenize_text(query_token, self.stopwords, self.stemmer)
+            if stemmed_tokens:
+                candidate_docs.update(self.index.get(stemmed_tokens[0], set()))
+    
+        for doc_id in candidate_docs:
+            for query_token in query_tokens:
+                scores[doc_id] += self.bm25(doc_id, query_token)
+        
+        return heapq.nlargest(limit, scores.items(), key=lambda item: item[1])
         
     
     def build(self):
@@ -83,6 +126,8 @@ class InvertedIndex:
             pickle.dump(self.docmap, f)
         with open('cache/term_frequencies.pkl', 'wb') as f:
             pickle.dump(self.term_frequencies, f)
+        with open('cache/doc_lengths.pkl', 'wb') as f:
+            pickle.dump(self.doc_lengths, f)
 
 
     def load(self):
@@ -93,5 +138,7 @@ class InvertedIndex:
                 self.docmap = pickle.load(f)
             with open('cache/term_frequencies.pkl', 'rb') as f:
                 self.term_frequencies = pickle.load(f)
+            with open('cache/doc_lengths.pkl', 'rb') as f:
+                self.doc_lengths = pickle.load(f)
         except FileNotFoundError: 
             raise FileNotFoundError("File not found. Must run build command first to create the index.")
